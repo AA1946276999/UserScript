@@ -1,0 +1,203 @@
+// ==UserScript==
+// @name         绿黄黑护眼模式 Green, yellow and black eye-protecting mode
+// @namespace    http://tampermonkey.net/
+// @version      5.0
+// @description  点击设置弹出窗口可调节护眼模式以及强度，支持豆沙绿、夜间黑、深暖色。
+// @author       shenada&Gemini 3
+// @match        *://*/*
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_registerMenuCommand
+// @grant        GM_addValueChangeListener
+// @license      MIT
+// @run-at       document-start
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // === 1. 配置与参数 ===
+    const PRESETS = {
+        green: { name: '豆沙绿', color: '#C7EDCC', mode: 'multiply' },
+        yellow: { name: '深暖色', color: '#CFB988', mode: 'multiply' },
+        dark: { name: '夜间黑', color: '#000000', mode: 'normal' }
+    };
+
+    let config = {
+        mode: GM_getValue('mode', 'green'),
+        opacity: GM_getValue('opacity', 0.3),
+        enabled: GM_getValue('enabled', true)
+    };
+
+    // Z-Index 管理：确保面板永远在蒙层上面
+    // 蒙层用 max-100，面板用 max，这样面板一定压在蒙层上
+    const Z_INDEX_OVERLAY = 2147483500;
+    const Z_INDEX_PANEL = 2147483647;
+
+    // === 2. 护眼蒙层 ===
+    const overlay = document.createElement('div');
+    // 关键：Pointer-events none 让鼠标能穿透蒙层点击网页
+    overlay.style.cssText = `
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        z-index: ${Z_INDEX_OVERLAY};
+        pointer-events: none;
+        transition: background 0.2s, opacity 0.2s;
+    `;
+
+    function updateOverlay() {
+        if (!config.enabled) {
+            overlay.style.opacity = 0;
+            return;
+        }
+        const currentPreset = PRESETS[config.mode];
+        overlay.style.backgroundColor = currentPreset.color;
+        overlay.style.mixBlendMode = currentPreset.mode;
+        overlay.style.opacity = config.opacity;
+    }
+
+    const initOverlay = () => {
+        // 挂载到 documentElement (html标签) 保证覆盖最全
+        if (!overlay.parentNode) {
+            document.documentElement.appendChild(overlay);
+            updateOverlay();
+        }
+    };
+    initOverlay();
+    window.addEventListener('DOMContentLoaded', initOverlay);
+    window.addEventListener('load', initOverlay);
+
+    // 跨窗口同步监听
+    GM_addValueChangeListener('opacity', (n, o, v) => { config.opacity = v; updateOverlay(); });
+    GM_addValueChangeListener('mode', (n, o, v) => { config.mode = v; updateOverlay(); });
+    GM_addValueChangeListener('enabled', (n, o, v) => { config.enabled = v; updateOverlay(); });
+
+
+    // === 3. 设置面板 (只在顶层窗口显示，且不被染色) ===
+    if (window.self !== window.top) return;
+
+    let panel = null;
+    function createPanel() {
+        if (panel) return;
+
+        panel = document.createElement('div');
+        panel.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                <span style="font-weight:bold; font-size:16px;">护眼设置</span>
+                <span id="eye-close-btn" style="cursor:pointer; padding:5px; font-size:18px; opacity:0.7;">✕</span>
+            </div>
+
+            <div style="margin-bottom:20px;">
+                <label style="display:flex; justify-content:space-between; margin-bottom:10px; font-size:14px; color:#ccc;">
+                    <span>浓度调节</span>
+                    <span id="eye-val-display" style="color:#fff; font-weight:bold;">${Math.round(config.opacity * 100)}%</span>
+                </label>
+                <div style="position:relative; height:20px; display:flex; align-items:center;">
+                    <input type="range" id="eye-slider" min="0" max="0.95" step="0.05" value="${config.opacity}"
+                        style="width:100%; cursor:pointer; accent-color: #52c41a; margin:0;">
+                </div>
+            </div>
+
+            <div style="display:flex; gap:10px;">
+                <button class="eye-mode-btn" data-mode="green" style="background:#C7EDCC; color:#000;">绿</button>
+                <button class="eye-mode-btn" data-mode="yellow" style="background:#E0D4A8; color:#000;">暖</button>
+                <button class="eye-mode-btn" data-mode="dark" style="background:#444; color:#fff;">黑</button>
+                <button id="eye-toggle-btn" style="background:${config.enabled ? '#ff4d4f' : '#52c41a'}; color:#fff; flex:1.2;">
+                    ${config.enabled ? '关闭' : '开启'}
+                </button>
+            </div>
+        `;
+
+        // 面板样式
+        panel.style.cssText = `
+            position: fixed;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 300px;
+            padding: 24px;
+            background: #222; /* 纯深色背景 */
+            border: 1px solid rgba(255,255,255,0.15);
+            color: #eee;
+            border-radius: 12px;
+            z-index: ${Z_INDEX_PANEL}; /* 关键：确保比蒙层高 */
+            font-family: system-ui, -apple-system, sans-serif;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.8);
+            display: none;
+            /* 防止面板受页面CSS影响 */
+            line-height: 1.5;
+            text-align: left;
+            box-sizing: border-box;
+        `;
+
+        // 按钮样式
+        const style = document.createElement('style');
+        style.textContent = `
+            .eye-mode-btn, #eye-toggle-btn {
+                flex: 1; border: none; border-radius: 6px; padding: 10px 0;
+                cursor: pointer; font-size: 13px; font-weight: bold; transition: filter 0.2s;
+            }
+            .eye-mode-btn:hover, #eye-toggle-btn:hover { filter: brightness(1.1); }
+            #eye-close-btn:hover { opacity: 1; color: #fff; }
+        `;
+        document.head.appendChild(style);
+        // 关键：挂载到 documentElement 确保和蒙层在同一父级下比较 z-index
+        document.documentElement.appendChild(panel);
+
+        // 事件处理
+        const slider = panel.querySelector('#eye-slider');
+        const valDisplay = panel.querySelector('#eye-val-display');
+        const toggleBtn = panel.querySelector('#eye-toggle-btn');
+        const closeBtn = panel.querySelector('#eye-close-btn');
+
+        slider.oninput = (e) => {
+            const val = parseFloat(e.target.value);
+            valDisplay.textContent = Math.round(val * 100) + '%';
+            if(!config.enabled) {
+                config.enabled = true;
+                toggleBtn.textContent = '关闭';
+                toggleBtn.style.background = '#ff4d4f';
+                GM_setValue('enabled', true);
+            }
+            config.opacity = val;
+            updateOverlay();
+            GM_setValue('opacity', val);
+        };
+
+        panel.querySelectorAll('.eye-mode-btn').forEach(btn => {
+            btn.onclick = () => {
+                config.mode = btn.dataset.mode;
+                if(!config.enabled) {
+                    config.enabled = true;
+                    toggleBtn.textContent = '关闭';
+                    toggleBtn.style.background = '#ff4d4f';
+                    GM_setValue('enabled', true);
+                }
+                updateOverlay();
+                GM_setValue('mode', config.mode);
+            };
+        });
+
+        toggleBtn.onclick = () => {
+            config.enabled = !config.enabled;
+            toggleBtn.textContent = config.enabled ? '关闭' : '开启';
+            toggleBtn.style.background = config.enabled ? '#ff4d4f' : '#52c41a';
+            updateOverlay();
+            GM_setValue('enabled', config.enabled);
+        };
+
+        closeBtn.onclick = () => panel.style.display = 'none';
+
+        // 点击外部关闭
+        document.addEventListener('mousedown', (e) => {
+            if (panel.style.display === 'block' && !panel.contains(e.target)) {
+                panel.style.display = 'none';
+            }
+        });
+    }
+
+    GM_registerMenuCommand("⚙️ 护眼设置", () => {
+        createPanel();
+        panel.style.display = 'block';
+    });
+
+})();
